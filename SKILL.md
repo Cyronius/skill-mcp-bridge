@@ -1,64 +1,49 @@
-# MCP Bridge Skill for Claude Code
+---
+name: mcp-bridge
+description: Infrastructure skill providing the skill-mcp-bridge CLI for connecting Claude Code skills to MCP servers. Not triggered directly - other skills define mcp-servers in their frontmatter and use allowed-tools Bash(skill-mcp-bridge:*).
+---
 
-A Claude Code skill that provides the `skill-mcp-bridge` CLI tool for connecting skills to MCP (Model Context Protocol) servers.
+# MCP Bridge Skill
 
-## Problem
+This skill provides the `skill-mcp-bridge` CLI tool that allows Claude Code skills to interact with MCP (Model Context Protocol) servers through a simple command-line interface.
 
-1. **Token bloat**: MCP servers in Claude Code stuff full tool schemas into context
-2. **Unreliable management**: Claude Code (especially VS Code) poorly manages MCP server lifecycle
+## Overview
 
-## Solution
+The MCP Bridge solves two problems with native MCP integration in Claude Code:
 
-This skill lets Claude Code use MCP servers through a lightweight CLI interface:
-- Skills define MCP servers in YAML frontmatter
-- Claude uses simple CLI commands instead of full MCP protocol
-- A background daemon manages MCP server lifecycle
-- Multiple VS Code instances share the same daemon
+1. **Token bloat**: MCP servers normally inject full tool schemas into context
+2. **Unreliable lifecycle**: Claude Code (especially VS Code extension) poorly manages MCP server processes
 
-## Prerequisites
-
-- Node.js 20 or higher
-- npm
+The bridge provides:
+- A background daemon that manages MCP server lifecycle
+- Lazy server spawning on first use
+- Connection caching with 5-minute idle timeout
+- Shared daemon across all VS Code instances
 
 ## Installation
 
-1. Copy this directory to your Claude Code skills folder:
-   ```
-   ~/.claude/skills/mcp-bridge/
-   ```
+Run the install script after copying to `~/.claude/skills/mcp-bridge/`:
 
-2. Run the install script:
-   ```powershell
-   # Windows
-   cd ~/.claude/skills/mcp-bridge
-   .\install.ps1
-   ```
-   ```bash
-   # Unix/macOS
-   cd ~/.claude/skills/mcp-bridge
-   ./install.sh
-   ```
+```powershell
+# Windows
+.\install.ps1
 
-3. Verify installation:
-   ```bash
-   skill-mcp-bridge --version
-   skill-mcp-bridge --help
-   ```
+# Unix/macOS
+./install.sh
+```
 
-## Quick Start
+Or manually:
 
-See the `examples/` directory for complete example skills:
-- `examples/sql-skill/` - SQL Server database queries
-- `examples/playwright-skill/` - Browser automation
-- `examples/echo-skill/` - Simple test server
+```bash
+cd cli
+npm install
+npm run build
+npm link
+```
 
-To create a skill that uses MCP servers:
+## Creating Skills That Use the Bridge
 
-1. Create a `SKILL.md` with `mcp-servers` in the frontmatter
-2. Add `allowed-tools: Bash(skill-mcp-bridge:*)`
-3. Use `skill-mcp-bridge` commands in your skill instructions
-
-Example SKILL.md:
+To use MCP servers in your skill, add `mcp-servers` to your SKILL.md frontmatter:
 
 ```yaml
 ---
@@ -75,8 +60,13 @@ mcp-servers:
 
 # My Database Skill
 
-skill-mcp-bridge call postgres query '{"sql": "SELECT * FROM users"}'
+Use `skill-mcp-bridge` to query the database:
+
+skill-mcp-bridge list-tools postgres
+skill-mcp-bridge call postgres query '{"sql": "SELECT * FROM users LIMIT 10"}'
 ```
+
+See the `examples/` directory for complete example skills.
 
 ## CLI Commands
 
@@ -87,7 +77,7 @@ skill-mcp-bridge call <server> <tool> '<json-args>'
 # List available tools on a server
 skill-mcp-bridge list-tools <server>
 
-# List configured servers
+# List configured servers (from current SKILL.md)
 skill-mcp-bridge list-servers
 
 # Daemon management
@@ -95,32 +85,32 @@ skill-mcp-bridge start     # Start daemon explicitly
 skill-mcp-bridge stop      # Stop daemon and all servers
 skill-mcp-bridge status    # Show daemon/server status
 
-# Validate SKILL.md
+# Validate SKILL.md configuration
 skill-mcp-bridge validate
 
 # Use custom config file
 skill-mcp-bridge -c /path/to/SKILL.md <command>
 ```
 
-## How It Works
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  SKILL.md                                               │
-│  - MCP servers in YAML frontmatter                      │
-│  - Human-readable tool documentation                    │
+│  SKILL.md (your skill)                                  │
+│  - MCP servers defined in YAML frontmatter              │
+│  - Human-readable documentation                         │
 └─────────────────────────────────────────────────────────┘
                           │
                           ▼
 ┌─────────────────────────────────────────────────────────┐
-│  Claude calls CLI via Bash                              │
+│  Claude Code calls CLI via Bash                         │
 │  skill-mcp-bridge call postgres query '{"sql": "..."}'  │
 └─────────────────────────────────────────────────────────┘
                           │
                           ▼ (auto-starts if needed)
 ┌─────────────────────────────────────────────────────────┐
 │  skill-mcp-bridge daemon (TCP localhost:56789)          │
-│  - Shared across all VS Code instances                  │
+│  - Shared across all Claude Code instances              │
 │  - Lazy spawns MCP servers on first use                 │
 │  - Keeps servers warm for fast subsequent calls         │
 └─────────────────────────────────────────────────────────┘
@@ -133,27 +123,49 @@ skill-mcp-bridge -c /path/to/SKILL.md <command>
 └─────────────────────────────────────────────────────────┘
 ```
 
-## Benefits
+## Environment Variables
 
-- **Token efficient**: Claude only sees skill instructions + JSON results
-- **Fast**: Daemon keeps servers warm, no startup overhead after first call
-- **Reliable**: Bypasses Claude Code's MCP management entirely
-- **Shareable**: Package skills with their MCP dependencies
+In your skill's SKILL.md, use `${VAR}` syntax for environment variables:
 
-## Development
-
-The CLI source code is in the `cli/` subdirectory:
-
-```bash
-cd cli
-npm install
-npm run dev       # Run with tsx (hot reload)
-npm run build     # Compile TypeScript
-npm test          # Run tests
+```yaml
+mcp-servers:
+  - name: db
+    command: npx
+    args: ["-y", "mssql-mcp-server"]
+    env:
+      MSSQL_CONNECTION_STRING: "${MSSQL_CONNECTION_STRING}"
 ```
 
-See `SKILL.md` in this directory for complete documentation.
+Variables are resolved from:
+1. System environment
+2. `.env` file in the same directory as SKILL.md
 
-## License
+## Troubleshooting
 
-MIT
+### Command not found
+
+Ensure the CLI is installed globally:
+
+```bash
+cd ~/.claude/skills/mcp-bridge/cli
+npm link
+```
+
+### Server not starting
+
+Check daemon status:
+
+```bash
+skill-mcp-bridge status
+```
+
+Stop and restart:
+
+```bash
+skill-mcp-bridge stop
+skill-mcp-bridge start
+```
+
+### Environment variables not resolving
+
+Create a `.env` file in your skill directory (same location as SKILL.md).
